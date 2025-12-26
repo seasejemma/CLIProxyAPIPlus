@@ -1,0 +1,9 @@
+services:
+  cli-proxy-api:
+    container_name: cpa
+    networks:
+      - webproxy
+
+networks:
+  webproxy:
+    external: true

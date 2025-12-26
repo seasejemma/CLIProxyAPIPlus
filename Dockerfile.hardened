@@ -1,0 +1,50 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+# Install ca-certificates and tzdata for copying to distroless
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X 'main.Version=${VERSION}-plus-hardened' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" \
+    -o ./CLIProxyAPIPlus ./cmd/server/
+
+# Runtime stage - Google Distroless (no shell, minimal attack surface)
+FROM gcr.io/distroless/static:nonroot
+
+WORKDIR /CLIProxyAPI
+
+# Copy timezone data from builder
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+# Copy CA certificates
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy binary
+COPY --from=builder /app/CLIProxyAPIPlus /CLIProxyAPI/CLIProxyAPIPlus
+
+# Copy example config
+COPY --from=builder /app/config.example.yaml /CLIProxyAPI/config.example.yaml
+
+# Set timezone via environment
+ENV TZ=Asia/Shanghai
+
+# Expose port
+EXPOSE 8317
+
+# Run as non-root user (distroless default: nonroot = 65532)
+USER nonroot:nonroot
+
+ENTRYPOINT ["./CLIProxyAPIPlus"]

@@ -1,0 +1,78 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/router-for-me/CLIProxyAPIPlus.git || true
+          git fetch upstream --tags
+
+      - name: Sync main branch
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit || echo "No changes or conflicts to resolve"
+          
+          # Remove upstream workflows to prevent conflicts
+          rm -f .github/workflows/docker-image.yml
+          rm -f .github/workflows/release.yaml
+          rm -f .github/workflows/pr-path-guard.yml
+          rm -f .github/workflows/pr-test-build.yml
+          
+          # Commit removals if any changes
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: remove upstream workflows"
+          
+          git push origin main || echo "Nothing to push"
+
+      - name: Check for new tags
+        id: check_tags
+        run: |
+          # Get tags from upstream that don't exist locally
+          NEW_TAGS=$(git tag -l 'v*' --sort=-v:refname | head -20)
+          UPSTREAM_TAGS=$(git ls-remote --tags upstream 'refs/tags/v*' | awk '{print $2}' | sed 's|refs/tags/||' | sort -V | tail -20)
+          
+          # Find latest upstream tag
+          LATEST_UPSTREAM=$(echo "$UPSTREAM_TAGS" | tail -1)
+          
+          # Check if we have this tag
+          if git rev-parse "$LATEST_UPSTREAM" >/dev/null 2>&1; then
+            echo "Tag $LATEST_UPSTREAM already exists"
+            echo "new_tag=" >> $GITHUB_OUTPUT
+          else
+            echo "New tag found: $LATEST_UPSTREAM"
+            echo "new_tag=$LATEST_UPSTREAM" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push new tags
+        if: steps.check_tags.outputs.new_tag != ''
+        run: |
+          git fetch upstream --tags
+          git push origin --tags
+
+      - name: Trigger build for new tag
+        if: steps.check_tags.outputs.new_tag != ''
+        run: |
+          gh workflow run ghcr-hardened.yml -f tag=${{ steps.check_tags.outputs.new_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
