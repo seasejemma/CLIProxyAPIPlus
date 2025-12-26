@@ -75,3 +75,26 @@ jobs:
             BUILD_DATE=${{ steps.buildmeta.outputs.BUILD_DATE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        if: startsWith(steps.buildmeta.outputs.VERSION, 'v')
+        run: |
+          TAG="${{ steps.buildmeta.outputs.VERSION }}"
+          VERSION="${TAG#v}"
+          
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping"
+          else
+            gh release create "$TAG" \
+              --title "Release $VERSION" \
+              --notes "Hardened Docker image build
+
+**Docker Image:**
+\`\`\`
+docker pull ghcr.io/${{ github.repository }}:${VERSION}
+\`\`\`
+
+**Changes:** See [upstream changelog](https://github.com/router-for-me/CLIProxyAPIPlus/releases/tag/$TAG)"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
