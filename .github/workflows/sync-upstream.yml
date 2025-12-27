@@ -5,11 +5,16 @@ on:
     - cron: '*/30 * * * *'  # Every 30 minutes
   workflow_dispatch:
 
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
       - name: Checkout
@@ -26,7 +31,7 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/router-for-me/CLIProxyAPIPlus.git || true
-          git fetch upstream --tags
+          git fetch upstream --tags --force
 
       - name: Sync main branch
         run: |
@@ -45,43 +50,37 @@ jobs:
           
           git push origin main || echo "Nothing to push"
 
-      - name: Check for new tags
-        id: check_tags
+      - name: Log in to GHCR for manifest check
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push new tags and trigger build
         run: |
-          # Get tags from upstream that don't exist locally
-          NEW_TAGS=$(git tag -l 'v*' --sort=-v:refname | head -20)
-          UPSTREAM_TAGS=$(git ls-remote --tags upstream 'refs/tags/v*' | awk '{print $2}' | sed 's|refs/tags/||' | sort -V | tail -20)
-          
-          # Find latest upstream tag
-          LATEST_UPSTREAM=$(echo "$UPSTREAM_TAGS" | tail -1)
-          
-          # Check if we have this tag
-          if git rev-parse "$LATEST_UPSTREAM" >/dev/null 2>&1; then
-            echo "Tag $LATEST_UPSTREAM already exists"
-            echo "new_tag=" >> $GITHUB_OUTPUT
-          else
-            echo "New tag found: $LATEST_UPSTREAM"
-            echo "new_tag=$LATEST_UPSTREAM" >> $GITHUB_OUTPUT
+          # Push any tags that exist upstream but not in origin
+          git tag -l 'v*' | while read tag; do
+            if ! git ls-remote --tags origin | grep -q "refs/tags/$tag$"; then
+              echo "Pushing new tag: $tag"
+              git push origin "$tag" || true
+            fi
+          done
+
+          # Get latest upstream tag
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No tags found"
+            exit 0
           fi
 
-      - name: Push new tags
-        if: steps.check_tags.outputs.new_tag != ''
-        run: |
-          git fetch upstream --tags
-          git push origin --tags
+          # Check if image exists in ghcr.io
+          # GHCR requires lowercase image names
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          # Use full tag (with v prefix) since that's how images are tagged
+          IMAGE="ghcr.io/${REPO_LOWER}:${LATEST_TAG}"
 
-      - name: Trigger build for new tag
-        if: steps.check_tags.outputs.new_tag != ''
-        run: |
-          TAG="${{ steps.check_tags.outputs.new_tag }}"
-          VERSION="${TAG#v}"
-          IMAGE="ghcr.io/${{ github.repository }}:${VERSION}"
-          
           if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
             echo "Image $IMAGE already exists, skipping build"
           else
-            echo "Image $IMAGE not found, triggering build for $TAG"
-            gh workflow run ghcr-hardened.yml -R ${{ github.repository }} -f tag=$TAG
+            echo "Image $IMAGE not found, triggering build for $LATEST_TAG"
+            gh workflow run ghcr-hardened.yml -R ${{ github.repository }} -f tag="$LATEST_TAG"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
