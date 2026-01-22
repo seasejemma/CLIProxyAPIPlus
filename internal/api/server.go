@@ -23,9 +23,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -33,6 +35,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -253,15 +256,13 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	managementasset.SetCurrentConfig(cfg)
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
+	misc.SetCodexInstructionsEnabled(cfg.CodexInstructionsEnabled)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
-	logDir := filepath.Join(s.currentPath, "logs")
-	if base := util.WritablePath(); base != "" {
-		logDir = filepath.Join(base, "logs")
-	}
+	logDir := logging.ResolveLogDirectory(cfg)
 	s.mgmt.SetLogDirectory(logDir)
 	s.localPassword = optionState.localPassword
 
@@ -291,6 +292,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if hasManagementSecret {
 		s.registerManagementRoutes()
 	}
+
+	// === CLIProxyAPIPlus 扩展: 注册 Kiro OAuth Web 路由 ===
+	kiroOAuthHandler := kiro.NewOAuthWebHandler(cfg)
+	kiroOAuthHandler.RegisterRoutes(engine)
+	log.Info("Kiro OAuth Web routes registered at /v0/oauth/kiro/*")
 
 	if optionState.keepAliveEnabled {
 		s.enableKeepAlive(optionState.keepAliveTimeout, optionState.keepAliveOnTimeout)
@@ -511,6 +517,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/logging-to-file", s.mgmt.PutLoggingToFile)
 		mgmt.PATCH("/logging-to-file", s.mgmt.PutLoggingToFile)
 
+		mgmt.GET("/logs-max-total-size-mb", s.mgmt.GetLogsMaxTotalSizeMB)
+		mgmt.PUT("/logs-max-total-size-mb", s.mgmt.PutLogsMaxTotalSizeMB)
+		mgmt.PATCH("/logs-max-total-size-mb", s.mgmt.PutLogsMaxTotalSizeMB)
+
 		mgmt.GET("/usage-statistics-enabled", s.mgmt.GetUsageStatisticsEnabled)
 		mgmt.PUT("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
 		mgmt.PATCH("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
@@ -519,6 +529,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
 		mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
 		mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
+
+		mgmt.POST("/api-call", s.mgmt.APICall)
 
 		mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
 		mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
@@ -569,6 +581,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/ampcode/force-model-mappings", s.mgmt.GetAmpForceModelMappings)
 		mgmt.PUT("/ampcode/force-model-mappings", s.mgmt.PutAmpForceModelMappings)
 		mgmt.PATCH("/ampcode/force-model-mappings", s.mgmt.PutAmpForceModelMappings)
+		mgmt.GET("/ampcode/upstream-api-keys", s.mgmt.GetAmpUpstreamAPIKeys)
+		mgmt.PUT("/ampcode/upstream-api-keys", s.mgmt.PutAmpUpstreamAPIKeys)
+		mgmt.PATCH("/ampcode/upstream-api-keys", s.mgmt.PatchAmpUpstreamAPIKeys)
+		mgmt.DELETE("/ampcode/upstream-api-keys", s.mgmt.DeleteAmpUpstreamAPIKeys)
 
 		mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
 		mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
@@ -576,6 +592,14 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/max-retry-interval", s.mgmt.GetMaxRetryInterval)
 		mgmt.PUT("/max-retry-interval", s.mgmt.PutMaxRetryInterval)
 		mgmt.PATCH("/max-retry-interval", s.mgmt.PutMaxRetryInterval)
+
+		mgmt.GET("/force-model-prefix", s.mgmt.GetForceModelPrefix)
+		mgmt.PUT("/force-model-prefix", s.mgmt.PutForceModelPrefix)
+		mgmt.PATCH("/force-model-prefix", s.mgmt.PutForceModelPrefix)
+
+		mgmt.GET("/routing/strategy", s.mgmt.GetRoutingStrategy)
+		mgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
+		mgmt.PATCH("/routing/strategy", s.mgmt.PutRoutingStrategy)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
@@ -592,10 +616,20 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
 		mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
 
+		mgmt.GET("/vertex-api-key", s.mgmt.GetVertexCompatKeys)
+		mgmt.PUT("/vertex-api-key", s.mgmt.PutVertexCompatKeys)
+		mgmt.PATCH("/vertex-api-key", s.mgmt.PatchVertexCompatKey)
+		mgmt.DELETE("/vertex-api-key", s.mgmt.DeleteVertexCompatKey)
+
 		mgmt.GET("/oauth-excluded-models", s.mgmt.GetOAuthExcludedModels)
 		mgmt.PUT("/oauth-excluded-models", s.mgmt.PutOAuthExcludedModels)
 		mgmt.PATCH("/oauth-excluded-models", s.mgmt.PatchOAuthExcludedModels)
 		mgmt.DELETE("/oauth-excluded-models", s.mgmt.DeleteOAuthExcludedModels)
+
+		mgmt.GET("/oauth-model-alias", s.mgmt.GetOAuthModelAlias)
+		mgmt.PUT("/oauth-model-alias", s.mgmt.PutOAuthModelAlias)
+		mgmt.PATCH("/oauth-model-alias", s.mgmt.PatchOAuthModelAlias)
+		mgmt.DELETE("/oauth-model-alias", s.mgmt.DeleteOAuthModelAlias)
 
 		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
 		mgmt.GET("/auth-files/models", s.mgmt.GetAuthFileModels)
@@ -612,6 +646,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/iflow-auth-url", s.mgmt.RequestIFlowToken)
 		mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
 		mgmt.GET("/kiro-auth-url", s.mgmt.RequestKiroToken)
+		mgmt.GET("/github-auth-url", s.mgmt.RequestGitHubToken)
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	}
@@ -871,7 +906,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	}
 
 	if oldCfg == nil || oldCfg.LoggingToFile != cfg.LoggingToFile || oldCfg.LogsMaxTotalSizeMB != cfg.LogsMaxTotalSizeMB {
-		if err := logging.ConfigureLogOutput(cfg.LoggingToFile, cfg.LogsMaxTotalSizeMB); err != nil {
+		if err := logging.ConfigureLogOutput(cfg); err != nil {
 			log.Errorf("failed to reconfigure log output: %v", err)
 		} else {
 			if oldCfg == nil {
@@ -904,6 +939,16 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Debugf("disable_cooling toggled to %t", cfg.DisableCooling)
 		}
 	}
+
+	if oldCfg == nil || oldCfg.CodexInstructionsEnabled != cfg.CodexInstructionsEnabled {
+		misc.SetCodexInstructionsEnabled(cfg.CodexInstructionsEnabled)
+		if oldCfg != nil {
+			log.Debugf("codex_instructions_enabled updated from %t to %t", oldCfg.CodexInstructionsEnabled, cfg.CodexInstructionsEnabled)
+		} else {
+			log.Debugf("codex_instructions_enabled toggled to %t", cfg.CodexInstructionsEnabled)
+		}
+	}
+
 	if s.handlers != nil && s.handlers.AuthManager != nil {
 		s.handlers.AuthManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second)
 	}
@@ -981,8 +1026,12 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		log.Warnf("amp module is nil, skipping config update")
 	}
 
-	// Count client sources from configuration and auth directory
-	authFiles := util.CountAuthFiles(cfg.AuthDir)
+	// Count client sources from configuration and auth store.
+	tokenStore := sdkAuth.GetTokenStore()
+	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
+		dirSetter.SetBaseDir(cfg.AuthDir)
+	}
+	authEntries := util.CountAuthFiles(context.Background(), tokenStore)
 	geminiAPIKeyCount := len(cfg.GeminiKey)
 	claudeAPIKeyCount := len(cfg.ClaudeKey)
 	codexAPIKeyCount := len(cfg.CodexKey)
@@ -993,10 +1042,10 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		openAICompatCount += len(entry.APIKeyEntries)
 	}
 
-	total := authFiles + geminiAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + vertexAICompatCount + openAICompatCount
-	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d Gemini API keys + %d Claude API keys + %d Codex keys + %d Vertex-compat + %d OpenAI-compat)\n",
+	total := authEntries + geminiAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + vertexAICompatCount + openAICompatCount
+	fmt.Printf("server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Claude API keys + %d Codex keys + %d Vertex-compat + %d OpenAI-compat)\n",
 		total,
-		authFiles,
+		authEntries,
 		geminiAPIKeyCount,
 		claudeAPIKeyCount,
 		codexAPIKeyCount,

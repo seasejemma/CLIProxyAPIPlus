@@ -12,11 +12,15 @@ bin/*
 logs/*
 conv/*
 temp/*
+refs/*
+
+# Storage backends
 pgstore/*
 gitstore/*
 objectstore/*
+
+# Static assets
 static/*
-refs/*
 
 # Authentication data
 auths/*
@@ -30,14 +34,20 @@ GEMINI.md
 
 # Tooling metadata
 .vscode/*
+.codex/*
 .claude/*
 .gemini/*
 .serena/*
 .agent/*
+.agents/*
+.agents/*
+.opencode/*
 .bmad/*
 _bmad/*
+_bmad-output/*
 .mcp/cache/
 
 # macOS
 .DS_Store
 ._*
+*.bak

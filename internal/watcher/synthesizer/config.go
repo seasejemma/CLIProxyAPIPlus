@@ -2,6 +2,7 @@ package synthesizer
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
@@ -63,8 +64,14 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 			"source":  fmt.Sprintf("config:gemini[%s]", token),
 			"api_key": key,
 		}
+		if entry.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(entry.Priority)
+		}
 		if base != "" {
 			attrs["base_url"] = base
+		}
+		if hash := diff.ComputeGeminiModelsHash(entry.Models); hash != "" {
+			attrs["models_hash"] = hash
 		}
 		addConfigHeadersToAttrs(entry.Headers, attrs)
 		a := &coreauth.Auth{
@@ -103,6 +110,9 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		attrs := map[string]string{
 			"source":  fmt.Sprintf("config:claude[%s]", token),
 			"api_key": key,
+		}
+		if ck.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
 		if base != "" {
 			attrs["base_url"] = base
@@ -148,8 +158,14 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 			"source":  fmt.Sprintf("config:codex[%s]", token),
 			"api_key": key,
 		}
+		if ck.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(ck.Priority)
+		}
 		if ck.BaseURL != "" {
 			attrs["base_url"] = ck.BaseURL
+		}
+		if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
+			attrs["models_hash"] = hash
 		}
 		addConfigHeadersToAttrs(ck.Headers, attrs)
 		proxyURL := strings.TrimSpace(ck.ProxyURL)
@@ -200,6 +216,9 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				"compat_name":  compat.Name,
 				"provider_key": providerName,
 			}
+			if compat.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(compat.Priority)
+			}
 			if key != "" {
 				attrs["api_key"] = key
 			}
@@ -230,6 +249,9 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				"base_url":     base,
 				"compat_name":  compat.Name,
 				"provider_key": providerName,
+			}
+			if compat.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
 			if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
 				attrs["models_hash"] = hash
@@ -272,6 +294,9 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			"source":       fmt.Sprintf("config:vertex-apikey[%s]", token),
 			"base_url":     base,
 			"provider_key": providerName,
+		}
+		if compat.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(compat.Priority)
 		}
 		if key != "" {
 			attrs["api_key"] = key

@@ -19,6 +19,7 @@ func CleanJSONSchemaForAntigravity(jsonStr string) string {
 	// Phase 1: Convert and add hints
 	jsonStr = convertRefsToHints(jsonStr)
 	jsonStr = convertConstToEnum(jsonStr)
+	jsonStr = convertEnumValuesToStrings(jsonStr)
 	jsonStr = addEnumHints(jsonStr)
 	jsonStr = addAdditionalPropertiesHints(jsonStr)
 	jsonStr = moveConstraintsToDescription(jsonStr)
@@ -72,6 +73,33 @@ func convertConstToEnum(jsonStr string) string {
 		enumPath := trimSuffix(p, ".const") + ".enum"
 		if !gjson.Get(jsonStr, enumPath).Exists() {
 			jsonStr, _ = sjson.Set(jsonStr, enumPath, []interface{}{val.Value()})
+		}
+	}
+	return jsonStr
+}
+
+// convertEnumValuesToStrings ensures all enum values are strings.
+// Gemini API requires enum values to be of type string, not numbers or booleans.
+func convertEnumValuesToStrings(jsonStr string) string {
+	for _, p := range findPaths(jsonStr, "enum") {
+		arr := gjson.Get(jsonStr, p)
+		if !arr.IsArray() {
+			continue
+		}
+
+		var stringVals []string
+		needsConversion := false
+		for _, item := range arr.Array() {
+			// Check if any value is not a string
+			if item.Type != gjson.String {
+				needsConversion = true
+			}
+			stringVals = append(stringVals, item.String())
+		}
+
+		// Only update if we found non-string values
+		if needsConversion {
+			jsonStr, _ = sjson.Set(jsonStr, p, stringVals)
 		}
 	}
 	return jsonStr
@@ -344,7 +372,7 @@ func cleanupRequiredFields(jsonStr string) string {
 }
 
 // addEmptySchemaPlaceholder adds a placeholder "reason" property to empty object schemas.
-// Claude VALIDATED mode requires at least one property in tool schemas.
+// Claude VALIDATED mode requires at least one required property in tool schemas.
 func addEmptySchemaPlaceholder(jsonStr string) string {
 	// Find all "type" fields
 	paths := findPaths(jsonStr, "type")
@@ -364,6 +392,9 @@ func addEmptySchemaPlaceholder(jsonStr string) string {
 		// Check if properties exists and is empty or missing
 		propsPath := joinPath(parentPath, "properties")
 		propsVal := gjson.Get(jsonStr, propsPath)
+		reqPath := joinPath(parentPath, "required")
+		reqVal := gjson.Get(jsonStr, reqPath)
+		hasRequiredProperties := reqVal.IsArray() && len(reqVal.Array()) > 0
 
 		needsPlaceholder := false
 		if !propsVal.Exists() {
@@ -381,8 +412,22 @@ func addEmptySchemaPlaceholder(jsonStr string) string {
 			jsonStr, _ = sjson.Set(jsonStr, reasonPath+".description", "Brief explanation of why you are calling this tool")
 
 			// Add to required array
-			reqPath := joinPath(parentPath, "required")
 			jsonStr, _ = sjson.Set(jsonStr, reqPath, []string{"reason"})
+			continue
+		}
+
+		// If schema has properties but none are required, add a minimal placeholder.
+		if propsVal.IsObject() && !hasRequiredProperties {
+			// DO NOT add placeholder if it's a top-level schema (parentPath is empty)
+			// or if we've already added a placeholder reason above.
+			if parentPath == "" {
+				continue
+			}
+			placeholderPath := joinPath(propsPath, "_")
+			if !gjson.Get(jsonStr, placeholderPath).Exists() {
+				jsonStr, _ = sjson.Set(jsonStr, placeholderPath+".type", "boolean")
+			}
+			jsonStr, _ = sjson.Set(jsonStr, reqPath, []string{"_"})
 		}
 	}
 
