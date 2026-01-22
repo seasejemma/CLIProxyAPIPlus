@@ -87,14 +87,7 @@ jobs:
           else
             gh release create "$TAG" \
               --title "Release $VERSION" \
-              --notes "Hardened Docker image build
-
-**Docker Image:**
-\`\`\`
-docker pull ghcr.io/${{ github.repository }}:${VERSION}
-\`\`\`
-
-**Changes:** See [upstream changelog](https://github.com/router-for-me/CLIProxyAPIPlus/releases/tag/$TAG)"
+              --notes "Hardened Docker image build with distroless runtime. Image: ghcr.io/${{ github.repository }}:${VERSION}"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
