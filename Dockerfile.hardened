@@ -21,6 +21,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X 'main.Version=${VERSION}-plus-hardened' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" \
     -o ./CLIProxyAPIPlus ./cmd/server/
 
+# Create auth directory with correct ownership for nonroot user (UID 65532)
+RUN mkdir -p /home/nonroot/.cli-proxy-api && \
+    chown -R 65532:65532 /home/nonroot/.cli-proxy-api && \
+    chmod 700 /home/nonroot/.cli-proxy-api
+
 # Runtime stage - Google Distroless (no shell, minimal attack surface)
 FROM gcr.io/distroless/static:nonroot
 
@@ -37,6 +42,9 @@ COPY --from=builder /app/CLIProxyAPIPlus /CLIProxyAPI/CLIProxyAPIPlus
 
 # Copy example config
 COPY --from=builder /app/config.example.yaml /CLIProxyAPI/config.example.yaml
+
+# Copy auth directory with correct ownership
+COPY --from=builder --chown=nonroot:nonroot /home/nonroot/.cli-proxy-api /home/nonroot/.cli-proxy-api
 
 # Set timezone via environment
 ENV TZ=Asia/Shanghai
